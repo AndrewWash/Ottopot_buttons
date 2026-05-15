@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.kvraudio.com)",
+      "WebFetch(domain:downloads.bitwig.com)",
+      "WebFetch(domain:programtalk.com)"
+    ]
+  }
+}
