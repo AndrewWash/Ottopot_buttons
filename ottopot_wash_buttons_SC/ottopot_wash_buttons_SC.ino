@@ -4,7 +4,7 @@
   Adds two momentary switches on pins 2 (Prev Bank) and 3 (Next Bank)
   to the existing 8-knob LED-ring controller. The switches transmit
   CC 110 / CC 111 (value 127) on the Ottopot MIDI channel (6); the
-  Bitwig controller script "ottopot_wash_buttons.control.js" binds
+  Bitwig controller script "ottopot_finetune.control.js" binds
   them to RemoteControlsPage select prev/next.
 
   LICENSE: GPL v3 (http://www.gnu.org/licenses/gpl.html)

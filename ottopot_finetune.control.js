@@ -1,22 +1,27 @@
-// Ottopot Wash + Buttons — Bitwig Studio controller extension for the Ottopot
+// ottopot_finetune — Bitwig Studio controller extension for the Ottopot
 // 8-knob 14-bit MIDI controller with two added momentary switches wired to
 // Teensy pins 2 (Prev Bank) and 3 (Next Bank). The switches transmit
 // CC 110 / CC 111 on MIDI channel 6 from the firmware and are bound here
 // to the cursor device's Remote Controls page select prev/next actions.
 //
-// Loads via the HardwareSurface API (Bitwig 3.1+). The original
-// "ottopot_wash.control.js" is preserved as a fallback — load one OR the
-// other in Bitwig's Controllers settings.
+// Loads via the HardwareSurface API (Bitwig 3.1+).
+//
+// Credits
+//   Hardware vendor : gerotakke
+//   Author          : Andrew Wash <andrew.wash6@gmail.com>
+//   Firmware deadzone fine-tuning + this script worked out with the help of
+//   Claude Code (Anthropic) — shoutout to the AI that helped hunt down the
+//   slow-turn choppiness. 🤖🎛️
 
 loadAPI(18);
 host.setShouldFailOnDeprecatedUse(true);
 
 host.defineController(
-    "wash_buttons",
-    "Ottopot Wash + Buttons",
+    "gerotakke",
+    "ottopot_finetune",
     "0.2",
     "7a3f9c2e-1b8d-4f6a-9e5c-3d2a1b7f0e8c",
-    "wash_buttons"
+    "Andrew Wash <andrew.wash6@gmail.com>"
 );
 host.defineMidiPorts(1, 1);
 host.addDeviceNameBasedDiscoveryPair(["Ottopot"], ["Ottopot"]);
