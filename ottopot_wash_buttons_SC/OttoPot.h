@@ -38,6 +38,8 @@ public:
   bool locked;                      // true = silent (not transmitting)
   unsigned long lastMovementMillis; // last time genuine movement was seen
   int netAccum;                     // continuous net-signed displacement
+  int dzRun;                        // consecutive same-sign delta count (Phase 2)
+  int dzRunDir;                     // sign of the current run: +1 / -1 / 0
 
   rgb offColor;
   rgb onColor;
