@@ -9,7 +9,7 @@ public:
   float prevAngle = 0.0;
   int valueChanged; // This is the amount of change between last collection and
   // this current one.
-  int linearDelta;
+  int linearDelta = 0;
   float flinearDelta = 0.0;
   EndlessPotentiometer();
   void updateValues(int valueA, int valueB);

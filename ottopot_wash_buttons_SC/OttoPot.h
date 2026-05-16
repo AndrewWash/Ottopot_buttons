@@ -30,7 +30,14 @@ public:
   int receivedHSB;
   int receivedLSB;
   int value;
-  int dzValue;
+  float dzValue;
+  int pendingDelta;
+
+  // Deadzone state machine (Finding #5). dzValue drives the initial unlock
+  // burst; staying unlocked is time-based — see updateValue().
+  bool locked;                      // true = silent (not transmitting)
+  unsigned long lastMovementMillis; // last time genuine movement was seen
+  int netAccum;                     // continuous net-signed displacement
 
   rgb offColor;
   rgb onColor;
@@ -62,6 +69,7 @@ public:
   void updateLEDs();
   void intro(unsigned long intromillis, uint8_t offset);
   void initialize();
+  void reseedBaseline();
   void handleControlChange(byte rchannel, byte rcontrol, byte rvalue);
 };
 

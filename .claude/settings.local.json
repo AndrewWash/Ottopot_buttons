@@ -6,7 +6,14 @@
       "WebFetch(domain:www.kvraudio.com)",
       "WebFetch(domain:downloads.bitwig.com)",
       "WebFetch(domain:programtalk.com)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\code\\\\Ottopot_buttons\" -Force | Select-Object Name, @{N='IsDirectory';E={$_.PSIsContainer}})",
+      "Bash(ls *)",
+      "Bash(find C:\\\\\\\\code\\\\\\\\Ottopot_buttons *)",
+      "Bash(grep *)",
+      "Bash(find \"C:\\\\\\\\code\\\\\\\\Ottopot_buttons\" -name)",
+      "Bash(git -C \"C:/code/Ottopot_buttons\" log --oneline -5)",
+      "Bash(git -C \"C:/code/Ottopot_buttons\" branch --show-current)"
     ]
   }
 }
