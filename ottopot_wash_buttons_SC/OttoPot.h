@@ -30,7 +30,8 @@ public:
   int receivedHSB;
   int receivedLSB;
   int value;
-  int dzValue;
+  float dzValue;
+  int pendingDelta;
 
   rgb offColor;
   rgb onColor;
@@ -62,6 +63,7 @@ public:
   void updateLEDs();
   void intro(unsigned long intromillis, uint8_t offset);
   void initialize();
+  void reseedBaseline();
   void handleControlChange(byte rchannel, byte rcontrol, byte rvalue);
 };
 

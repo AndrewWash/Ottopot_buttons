@@ -103,6 +103,9 @@ void loop() {
             showintro = false;
             for (int i = 0; i < NUMPOTS; i++) {
                 ottopot[i].intro(currentMillis - introMillis, i);
+                // Re-seed the delta baseline now that the intro is over, so a
+                // knob moved during the intro doesn't cause a spurious jump.
+                ottopot[i].reseedBaseline();
             }
         }
     } else {

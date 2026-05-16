@@ -20,6 +20,9 @@ OttoPot::OttoPot(admux::Mux *rmux, admux::Mux *rmux2, int rmuxc, int rcc,
 
   value = 0;
   dzValue = 0;
+  pendingDelta = 0;
+  receivedHSB = 0;
+  receivedLSB = 0;
 
   previousMillis = millis();
   previousMicros = micros();
@@ -53,15 +56,22 @@ void OttoPot::initialize() {
   leds.LEDRingSmall_PWM_MODE();
 }
 
+// Re-seed the pot's previousValueA/B baseline from a fresh read. initialize()
+// seeds it once, but the ~1600 ms boot intro runs before the first loop() — a
+// knob moved during the intro would otherwise produce a spurious first delta.
+void OttoPot::reseedBaseline() {
+  mux->channel(muxc);
+  pot.updateValues(mux->read(), mux2->read());
+}
+
 void OttoPot::sendMidiCC(int rawVal) {
-  float hsb;
-  float lsb;
+  // rawVal is already integral; shift/mask give integer hsb/lsb directly.
+  // The old float + round(floor()) / round(ceil()) round-trip was a no-op.
+  int hsb = rawVal >> 7;
+  int lsb = rawVal & 127;
 
-  hsb = rawVal >> 7;
-  lsb = rawVal & 127;
-
-  usbMIDI.sendControlChange(cc, round(floor(hsb)), channel);
-  usbMIDI.sendControlChange(cc + 32, round(ceil(lsb)), channel);
+  usbMIDI.sendControlChange(cc, hsb, channel);
+  usbMIDI.sendControlChange(cc + 32, lsb, channel);
 }
 
 void OttoPot::handleControlChange(byte rchannel, byte rcontrol, byte rvalue) {
@@ -169,6 +179,12 @@ void OttoPot::updateValue(unsigned long currentMillis,
   int pin2[READS];
   mux->channel(muxc);
 
+  // Throwaway read: charge the ADC sample/hold cap to the newly-selected mux
+  // channel before the real reads, avoiding cross-channel ghosting on the
+  // first conversion.
+  (void)mux->read();
+  (void)mux2->read();
+
   for (uint8_t i = 0; i < READS; i++) {
     pin1[i] = mux->read();
     pin2[i] = mux2->read();
@@ -186,12 +202,12 @@ void OttoPot::updateValue(unsigned long currentMillis,
 
   delta = pot.linearDelta;
 
-  dzValue = max(dzValue, 0);
+  dzValue = max(dzValue, 0.0f);
   dzValue += abs(delta);
-  dzValue = min(dzValue, 40);
+  dzValue = min(dzValue, 40.0f);
 
 #ifdef DEBUG_DZ_LOGS
-  dzMax = max(dzMax, dzValue);
+  dzMax = max(dzMax, (int)dzValue);
   if (currentMillis - dzIntervalMillis >= 5000) {
     debugln("dzMax: %d", dzMax);
     dzMax = 0;
@@ -201,7 +217,10 @@ void OttoPot::updateValue(unsigned long currentMillis,
 
   if (dzValue > 10) {
     interactionMillis = currentMillis;
-    newValue = value + delta;
+    // Flush the run-up travel that accumulated while the deadzone was locked,
+    // so the gesture doesn't visibly lag the knob on unlock.
+    newValue = value + delta + pendingDelta;
+    pendingDelta = 0;
     if (newValue < 0) {
       newValue = 0;
     } else if (newValue > MAX_POT_VALUE) {
@@ -211,9 +230,21 @@ void OttoPot::updateValue(unsigned long currentMillis,
       setNewValue(newValue);
       sendMidiCC(map(value, 0, MAX_POT_VALUE, 0, 16383));
     }
+  } else {
+    // Locked: buffer travel so the run-up isn't dropped when we unlock.
+    pendingDelta += delta;
   }
 
-  dzValue -= deltaMicros / 5000;
+  // Time-based decay, decoupled from loop rate: ~1.0 per 5 ms regardless of
+  // how fast the loop runs (the old integer deltaMicros/5000 truncated to 1,
+  // sometimes 0, and depended entirely on delay(5) existing).
+  dzValue -= (float)deltaMicros / 5000.0f;
+  dzValue = max(dzValue, 0.0f);
+  // Relocked: discard the buffered run-up so a slow noise drift while locked
+  // can't quietly build up into a latent jump.
+  if (dzValue <= 0.0f) {
+    pendingDelta = 0;
+  }
   previousMillis = currentMillis;
   previousMicros = currentMicros;
 
@@ -225,7 +256,7 @@ void OttoPot::updateValue(unsigned long currentMillis,
   }
   if (muxc == 0) {
     debugln(",interaction:%d,%ddzValue:%d", (dzValue > 10) * 4000, muxc,
-            max(dzValue * 100, 0));
+            (int)max(dzValue * 100.0f, 0.0f));
   }
 #endif
 }

@@ -1,9 +1,0 @@
-Manufacturer=Alpha (Taiwan)
-PartNumber=RV112FF-40B1-15F
-PartCategory=Variable Resistor
-PackageCategory=Other
-PinCount=6
-Version=1.4
-Released=2021-08-16 10:14:48
-Downloaded=2024-01-23 11:10:03
-3D=Y
