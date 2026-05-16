@@ -8,10 +8,9 @@
 
 #define MIDI_CHANNEL 6
 
-// --- DIAGNOSTIC BUILD (branch diag-pot) -----------------------------------
-// DEBUG + DEBUG_DZ_TUNE enabled to stream the deadzone tuning plot over USB
-// Serial. Requires USB Type = "Serial + MIDI" when flashing. Re-comment both
-// (and reflash as USB Type "MIDI") for the production build.
-#define DEBUG
-#define DEBUG_DZ_TUNE
-// #define DEBUG_DZ_LOGS   // leave OFF: its "dzMax:" lines corrupt the plot
+// Debug flags — all OFF for the production / distribution build.
+// For a deadzone tuning session: enable DEBUG + DEBUG_DZ_TUNE and flash with
+// USB Type = "Serial + MIDI". Production builds use USB Type = "MIDI".
+// #define DEBUG
+// #define DEBUG_DZ_TUNE
+// #define DEBUG_DZ_LOGS
