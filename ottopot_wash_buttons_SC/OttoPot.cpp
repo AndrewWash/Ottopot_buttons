@@ -18,9 +18,11 @@ LICENSE: GPL v3 (http://www.gnu.org/licenses/gpl.html)
 // before it could accumulate — reintroducing a speed floor; see diag-pot
 // Obs 3.) Diagnostics measured idle delta as exactly 0 — no noise reaches the
 // movement signal — so the threshold can be 1 with no stray-CC risk.
-#define DZ_UNLOCK_THRESHOLD  3     // dzValue burst to unlock; must stay above
-                                   // the largest single noise blip (~1-2) or
-                                   // idle noise unlocks the pot          [TUNE]
+#define DZ_UNLOCK_THRESHOLD  1.5f  // EXPERIMENT: dzValue is float, so this can
+                                   // be fractional. 1 was super responsive but
+                                   // ghosted CCs; 1.5 raises the bar slightly.
+                                   // dzValue sums abs(delta) so noise only ever
+                                   // pushes UP — see note below.          [TUNE]
 #define DZ_PAUSE_TIMEOUT_MS  300   // relock after this much stillness   [TUNE]
 #define DZ_NET_MOVE_COUNTS   1     // net counts that count as "genuine" [TUNE]
 

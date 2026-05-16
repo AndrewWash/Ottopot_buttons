@@ -2988,7 +2988,7 @@ constexpr auto max(A&& a, B&& b) -> decltype(a < b ? std::forward<A>(a) : std::f
     // Initial unlock still requires a deliberate rate burst — this is the
     // stray-CC / automation-takeover guard and must stay.
     if (dzValue > DZ_UNLOCK_THRESHOLD) {
-     b32:	eeb0 7a08 	vmov.f32	s14, #8	; 0x40400000  3.0
+     b32:	eeb7 7a00 	vmov.f32	s14, #112	; 0x3f800000  1.0
      b36:	eef4 7ac7 	vcmpe.f32	s15, s14
      b3a:	eef1 fa10 	vmrs	APSR_nzcv, fpscr
      b3e:	dc18      	bgt.n	b72 <OttoPot::updateValue(unsigned long, unsigned long)+0x10a>
