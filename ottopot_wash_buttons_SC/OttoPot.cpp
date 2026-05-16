@@ -11,14 +11,18 @@ LICENSE: GPL v3 (http://www.gnu.org/licenses/gpl.html)
 
 // ---- Deadzone tuning (Finding #5) ---------------------------------------
 // dzValue still detects the initial unlock burst (stray-CC / automation-
-// takeover guard). Staying unlocked is time-based: the pot keeps transmitting
-// as long as genuine movement keeps refreshing lastMovementMillis, and only
-// relocks after a true pause. "Genuine movement" = net SIGNED displacement
-// over a short window (real rotation nets travel; noise oscillates, nets ~0).
-#define DZ_UNLOCK_THRESHOLD  10    // dzValue burst to unlock (stray-CC guard)
+// takeover guard). Staying unlocked is time-based: a CONTINUOUS net-signed
+// displacement accumulator refreshes lastMovementMillis the moment it reaches
+// DZ_NET_MOVE_COUNTS, and the pot relocks only after DZ_PAUSE_TIMEOUT_MS of
+// stillness. (The earlier fixed 40 ms window reset discarded slow movement
+// before it could accumulate — reintroducing a speed floor; see diag-pot
+// Obs 3.) Diagnostics measured idle delta as exactly 0 — no noise reaches the
+// movement signal — so the threshold can be 1 with no stray-CC risk.
+#define DZ_UNLOCK_THRESHOLD  3     // dzValue burst to unlock; must stay above
+                                   // the largest single noise blip (~1-2) or
+                                   // idle noise unlocks the pot          [TUNE]
 #define DZ_PAUSE_TIMEOUT_MS  300   // relock after this much stillness   [TUNE]
-#define DZ_NET_WINDOW_MS     40    // net-displacement sampling window   [TUNE]
-#define DZ_NET_MOVE_COUNTS   2     // signed counts/window = "genuine"   [TUNE]
+#define DZ_NET_MOVE_COUNTS   1     // net counts that count as "genuine" [TUNE]
 
 OttoPot::OttoPot(admux::Mux *rmux, admux::Mux *rmux2, int rmuxc, int rcc,
                  int rchannel, uint8_t ledRingAddress)
@@ -37,8 +41,7 @@ OttoPot::OttoPot(admux::Mux *rmux, admux::Mux *rmux2, int rmuxc, int rcc,
 
   locked = true;                 // boot silent — must not transmit
   lastMovementMillis = millis();
-  netWindowMillis = millis();
-  netWindowSum = 0;
+  netAccum = 0;
 
   previousMillis = millis();
   previousMicros = micros();
@@ -232,18 +235,17 @@ void OttoPot::updateValue(unsigned long currentMillis,
 #endif
 
   // --- Deadzone state machine (Finding #5) -------------------------------
-  // Previously a single dzValue>10 test gated transmission, so staying
-  // unlocked needed enough movement RATE to out-pace the decay — any turn
-  // slower than that locked mid-gesture and stop-started ("choppiness").
-  // Now dzValue only detects the initial unlock; staying unlocked is timed.
+  // dzValue detects only the initial unlock burst. Staying unlocked is driven
+  // by a CONTINUOUS net-signed displacement accumulator (no fixed window): the
+  // earlier 40 ms window reset discarded slow movement before it could
+  // accumulate, reintroducing a speed floor (diag-pot Obs 3).
   if (locked) {
     // Initial unlock still requires a deliberate rate burst — this is the
     // stray-CC / automation-takeover guard and must stay.
     if (dzValue > DZ_UNLOCK_THRESHOLD) {
       locked = false;
       lastMovementMillis = currentMillis;
-      netWindowMillis = currentMillis;
-      netWindowSum = 0;
+      netAccum = 0;
     } else {
       // Still locked: buffer run-up travel so the gesture doesn't lag the
       // knob on unlock. Done only when we stay locked, so the transmit block
@@ -251,24 +253,23 @@ void OttoPot::updateValue(unsigned long currentMillis,
       pendingDelta += delta;
     }
   } else {
-    // Staying unlocked is time-based, not rate-based. Accumulate net SIGNED
-    // displacement over a short window: real rotation is directional and nets
-    // travel, analog noise oscillates around zero and nets ~0.
-    netWindowSum += delta;
-    if (currentMillis - netWindowMillis >= DZ_NET_WINDOW_MS) {
-      if (abs(netWindowSum) >= DZ_NET_MOVE_COUNTS) {
-        lastMovementMillis = currentMillis;
-      }
-      netWindowSum = 0;
-      netWindowMillis = currentMillis;
+    // Accumulate net signed travel continuously — never reset on a timer. The
+    // moment it reaches DZ_NET_MOVE_COUNTS that is confirmed genuine movement:
+    // refresh the pause timer and reset the accumulator. A turn of ANY speed
+    // eventually reaches the threshold, so it never relocks mid-gesture; idle
+    // delta is 0, so the accumulator never grows while the knob is still.
+    netAccum += delta;
+    if (abs(netAccum) >= DZ_NET_MOVE_COUNTS) {
+      lastMovementMillis = currentMillis;
+      netAccum = 0;
     }
-    // Relock only after a true pause — never mid-slow-turn.
+    // Relock only after a true pause — DZ_PAUSE_TIMEOUT_MS of no movement.
     if (currentMillis - lastMovementMillis > DZ_PAUSE_TIMEOUT_MS) {
       locked = true;
-      // Discard buffered run-up so a slow noise drift can't build a latent
-      // jump; clear dzValue so re-unlocking needs a fresh deliberate burst.
+      // Discard buffered run-up so a stray drift can't build a latent jump;
+      // clear dzValue so re-unlocking needs a fresh deliberate burst.
       pendingDelta = 0;
-      netWindowSum = 0;
+      netAccum = 0;
       dzValue = 0.0f;
     }
   }
@@ -301,18 +302,21 @@ void OttoPot::updateValue(unsigned long currentMillis,
   previousMicros = currentMicros;
 
 // Debugging graph for tuning the dead zone (Serial plotter).
-//  unlocked     - the true transmit gate (high = transmitting)
-//  dzValue      - unlock-burst accumulator (x100)
-//  netWindowSum - movement discriminator: ~0 when still, ramps on a slow turn
-//  sinceMove    - ms since genuine movement; relock fires at DZ_PAUSE_TIMEOUT_MS
+//  unlocked  - the true transmit gate (high = transmitting)
+//  dzValue   - unlock-burst accumulator (x100)
+//  delta     - per-loop movement (x100); 0 when still, nonzero while turning
+//  sinceMove - ms since genuine movement; relock fires at DZ_PAUSE_TIMEOUT_MS
 #ifdef DEBUG_DZ_TUNE
   if (muxc == 0) {
     debug("%dpin1:%d", muxc, pin1[MEDIAN]);
     debug(",%dpin2:%d", muxc, pin2[MEDIAN]);
-    debugln(",unlocked:%d,dzValue:%d,netWindowSum:%d,sinceMove:%d",
+    // sinceMove is clamped to 600 ms: while idle it would climb unbounded and
+    // wreck the plotter's autoscale. Anything past DZ_PAUSE_TIMEOUT_MS (300)
+    // is meaningless anyway — the pot has already relocked.
+    debugln(",unlocked:%d,dzValue:%d,delta:%d,sinceMove:%d",
             (!locked) * 4000, (int)max(dzValue * 100.0f, 0.0f),
-            netWindowSum * 100,
-            (int)(currentMillis - lastMovementMillis));
+            delta * 100,
+            (int)min(currentMillis - lastMovementMillis, (unsigned long)600));
   }
 #endif
 }
