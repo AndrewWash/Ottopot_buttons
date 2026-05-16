@@ -11,9 +11,16 @@
   Based on the Ottopot firmware by the upstream Ottopot authors.
 
   -------------------------------------------------------------------------
-  FIRMWARE VERSION: v0.4  (2026-05-16)
+  FIRMWARE VERSION: v0.5  (2026-05-16)
 
   CHANGE LOG
+    v0.5  Ghost-CC fix (method-2 branch):
+          - Unlock gate rewritten as a NET SIGNED accumulator (was abs-sum,
+            which only ever climbed so noise crept across a low threshold).
+          - Phase 2: unlock also requires DZ_MIN_RUN consecutive same-sign
+            deltas. Idle ADC dither reverses every 1-2 samples so it can no
+            longer unlock; genuine turns clear the run in ~3 ms.
+          - DEBUG per-CC TX log + selectable DEBUG_DZ_TUNE knob (DZ_TUNE_KNOB).
     v0.4  Hardware-tuned deadzone (diag-pot session):
           - Staying-unlocked rewritten as a continuous net-displacement
             accumulator, replacing the fixed 40 ms window that reintroduced a

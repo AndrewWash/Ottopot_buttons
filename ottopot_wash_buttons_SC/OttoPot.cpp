@@ -26,6 +26,14 @@ LICENSE: GPL v3 (http://www.gnu.org/licenses/gpl.html)
                                    // in the field.                       [TUNE]
 #define DZ_PAUSE_TIMEOUT_MS  300   // relock after this much stillness   [TUNE]
 #define DZ_NET_MOVE_COUNTS   1     // net counts that count as "genuine" [TUNE]
+// Phase 2: unlock also requires this many consecutive same-sign deltas. Idle
+// ADC dither reverses sign every 1-2 samples so it never builds the run; a
+// genuine turn clears it in ~3 loops (~3 ms) — imperceptible.            [TUNE]
+#define DZ_MIN_RUN           3
+
+// Which knob (muxc 0-7) the DEBUG_DZ_TUNE serial plotter prints. The per-CC
+// TX log below is unconditional across all 8 pots; this only steers the plot.
+#define DZ_TUNE_KNOB         0
 
 OttoPot::OttoPot(admux::Mux *rmux, admux::Mux *rmux2, int rmuxc, int rcc,
                  int rchannel, uint8_t ledRingAddress)
@@ -45,6 +53,8 @@ OttoPot::OttoPot(admux::Mux *rmux, admux::Mux *rmux2, int rmuxc, int rcc,
   locked = true;                 // boot silent — must not transmit
   lastMovementMillis = millis();
   netAccum = 0;
+  dzRun = 0;
+  dzRunDir = 0;
 
   previousMillis = millis();
   previousMicros = micros();
@@ -227,6 +237,21 @@ void OttoPot::updateValue(unsigned long currentMillis,
   dzValue += delta;                             // net signed travel — noise cancels
   dzValue = constrain(dzValue, -40.0f, 40.0f);
 
+  // Directional-persistence run counter (Phase 2): count consecutive same-sign
+  // deltas. A genuine turn produces a long run; idle dither reverses every
+  // 1-2 samples. Zero deltas don't reset it — slow turns have many zero loops
+  // between integer crossings. A stale run is expired in the decay block once
+  // dzValue has fully decayed back to 0.
+  if (delta != 0) {
+    int dir = (delta > 0) ? 1 : -1;
+    if (dir == dzRunDir) {
+      dzRun++;
+    } else {
+      dzRunDir = dir;
+      dzRun = 1;
+    }
+  }
+
 #ifdef DEBUG_DZ_LOGS
   dzMax = max(dzMax, (int)fabs(dzValue));
   if (currentMillis - dzIntervalMillis >= 5000) {
@@ -242,13 +267,17 @@ void OttoPot::updateValue(unsigned long currentMillis,
   // earlier 40 ms window reset discarded slow movement before it could
   // accumulate, reintroducing a speed floor (diag-pot Obs 3).
   if (locked) {
-    // Initial unlock still requires a deliberate rate burst — this is the
-    // stray-CC / automation-takeover guard and must stay.
-    if (fabs(dzValue) > DZ_UNLOCK_THRESHOLD) {
+    // Initial unlock requires a deliberate rate burst (dzValue) AND a
+    // sustained one-directional run of DZ_MIN_RUN samples (dzRun). Idle ADC
+    // dither reverses sign every 1-2 samples so it never builds the run —
+    // this is the stray-CC / automation-takeover guard. (Phase 2.)
+    if (fabs(dzValue) > DZ_UNLOCK_THRESHOLD && dzRun >= DZ_MIN_RUN) {
       locked = false;
       lastMovementMillis = currentMillis;
       netAccum = 0;
       dzValue = 0.0f;
+      dzRun = 0;
+      dzRunDir = 0;
     } else {
       // Still locked: buffer run-up travel so the gesture doesn't lag the
       // knob on unlock. Done only when we stay locked, so the transmit block
@@ -274,6 +303,8 @@ void OttoPot::updateValue(unsigned long currentMillis,
       pendingDelta = 0;
       netAccum = 0;
       dzValue = 0.0f;
+      dzRun = 0;
+      dzRunDir = 0;
     }
   }
 
@@ -293,6 +324,14 @@ void OttoPot::updateValue(unsigned long currentMillis,
       interactionMillis = currentMillis;
       setNewValue(newValue);
       sendMidiCC(map(value, 0, MAX_POT_VALUE, 0, 16383));
+#ifdef DEBUG
+      // Per-CC transmit log — fires for ALL 8 pots (the DZ plotter below
+      // covers only one). During an idle soak this prints only on a ghost CC,
+      // naming the culprit pot and its accumulator state at the moment it
+      // transmitted. See code_analysis/ghost-cc-tightening-plan.md.
+      debugln("TX cc:%d k:%d val:%d delta:%d dz:%d pend:%d", cc, muxc, value,
+              delta, (int)(dzValue * 100.0f), pendingDelta);
+#endif
     }
   }
 
@@ -304,6 +343,14 @@ void OttoPot::updateValue(unsigned long currentMillis,
     dzValue = max(dzValue - dzDecay, 0.0f);
   else if (dzValue < 0.0f)
     dzValue = min(dzValue + dzDecay, 0.0f);
+  // Expire a stale run: a run only means something while dzValue still holds
+  // recent net travel. Once it has decayed exactly to 0, isolated blips
+  // seconds apart must not slowly accumulate a false unlock. (max/min above
+  // clamp exactly to 0.0f, so this compare is safe.)
+  if (dzValue == 0.0f) {
+    dzRun = 0;
+    dzRunDir = 0;
+  }
   previousMillis = currentMillis;
   previousMicros = currentMicros;
 
@@ -311,17 +358,18 @@ void OttoPot::updateValue(unsigned long currentMillis,
 //  unlocked  - the true transmit gate (high = transmitting)
 //  dzValue   - net-signed unlock accumulator (x100); cancels toward 0 on noise
 //  delta     - per-loop movement (x100); 0 when still, nonzero while turning
+//  dzRun     - consecutive same-sign deltas; unlock needs >= DZ_MIN_RUN
 //  sinceMove - ms since genuine movement; relock fires at DZ_PAUSE_TIMEOUT_MS
 #ifdef DEBUG_DZ_TUNE
-  if (muxc == 0) {
+  if (muxc == DZ_TUNE_KNOB) {
     debug("%dpin1:%d", muxc, pin1[MEDIAN]);
     debug(",%dpin2:%d", muxc, pin2[MEDIAN]);
     // sinceMove is clamped to 600 ms: while idle it would climb unbounded and
     // wreck the plotter's autoscale. Anything past DZ_PAUSE_TIMEOUT_MS (300)
     // is meaningless anyway — the pot has already relocked.
-    debugln(",unlocked:%d,dzValue:%d,delta:%d,sinceMove:%d",
+    debugln(",unlocked:%d,dzValue:%d,delta:%d,dzRun:%d,sinceMove:%d",
             (!locked) * 4000, (int)(dzValue * 100.0f),
-            delta * 100,
+            delta * 100, dzRun,
             (int)min(currentMillis - lastMovementMillis, (unsigned long)600));
   }
 #endif
