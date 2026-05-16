@@ -9,20 +9,21 @@ LICENSE: GPL v3 (http://www.gnu.org/licenses/gpl.html)
 #include <Arduino.h>
 #include <Mux.h>
 
-// ---- Deadzone tuning (Finding #5) ---------------------------------------
-// dzValue still detects the initial unlock burst (stray-CC / automation-
-// takeover guard). Staying unlocked is time-based: a CONTINUOUS net-signed
-// displacement accumulator refreshes lastMovementMillis the moment it reaches
-// DZ_NET_MOVE_COUNTS, and the pot relocks only after DZ_PAUSE_TIMEOUT_MS of
-// stillness. (The earlier fixed 40 ms window reset discarded slow movement
-// before it could accumulate — reintroducing a speed floor; see diag-pot
-// Obs 3.) Diagnostics measured idle delta as exactly 0 — no noise reaches the
-// movement signal — so the threshold can be 1 with no stray-CC risk.
-#define DZ_UNLOCK_THRESHOLD  1.5f  // EXPERIMENT: dzValue is float, so this can
-                                   // be fractional. 1 was super responsive but
-                                   // ghosted CCs; 1.5 raises the bar slightly.
-                                   // dzValue sums abs(delta) so noise only ever
-                                   // pushes UP — see note below.          [TUNE]
+// ---- Deadzone tuning (Method 2: signed unlock gate) ---------------------
+// dzValue detects the initial unlock burst (stray-CC / automation-takeover
+// guard). It is a NET SIGNED displacement accumulator: opposite-sign noise
+// cancels toward 0, so only a genuine one-directional turn crosses the gate.
+// This decouples responsiveness from noise rejection — the threshold no
+// longer has to be a compromise. (The earlier dzValue summed abs(delta), so
+// noise of either sign only ever pushed it UP; a low threshold then admitted
+// noise and ghosted CCs — commit 9efa6b0.) Staying unlocked is time-based: a
+// CONTINUOUS net-signed displacement accumulator (netAccum) refreshes
+// lastMovementMillis the moment it reaches DZ_NET_MOVE_COUNTS, and the pot
+// relocks only after DZ_PAUSE_TIMEOUT_MS of stillness.
+#define DZ_UNLOCK_THRESHOLD  1.0f  // net signed travel (counts) to unlock.
+                                   // Safe at 1.0 now that noise self-cancels;
+                                   // raise toward 1.5 only if ghosting recurs
+                                   // in the field.                       [TUNE]
 #define DZ_PAUSE_TIMEOUT_MS  300   // relock after this much stillness   [TUNE]
 #define DZ_NET_MOVE_COUNTS   1     // net counts that count as "genuine" [TUNE]
 
@@ -223,12 +224,11 @@ void OttoPot::updateValue(unsigned long currentMillis,
 
   delta = pot.linearDelta;
 
-  dzValue = max(dzValue, 0.0f);
-  dzValue += abs(delta);
-  dzValue = min(dzValue, 40.0f);
+  dzValue += delta;                             // net signed travel — noise cancels
+  dzValue = constrain(dzValue, -40.0f, 40.0f);
 
 #ifdef DEBUG_DZ_LOGS
-  dzMax = max(dzMax, (int)dzValue);
+  dzMax = max(dzMax, (int)fabs(dzValue));
   if (currentMillis - dzIntervalMillis >= 5000) {
     debugln("dzMax: %d", dzMax);
     dzMax = 0;
@@ -244,10 +244,11 @@ void OttoPot::updateValue(unsigned long currentMillis,
   if (locked) {
     // Initial unlock still requires a deliberate rate burst — this is the
     // stray-CC / automation-takeover guard and must stay.
-    if (dzValue > DZ_UNLOCK_THRESHOLD) {
+    if (fabs(dzValue) > DZ_UNLOCK_THRESHOLD) {
       locked = false;
       lastMovementMillis = currentMillis;
       netAccum = 0;
+      dzValue = 0.0f;
     } else {
       // Still locked: buffer run-up travel so the gesture doesn't lag the
       // knob on unlock. Done only when we stay locked, so the transmit block
@@ -298,14 +299,17 @@ void OttoPot::updateValue(unsigned long currentMillis,
   // Time-based decay of the unlock-burst accumulator, decoupled from loop
   // rate: ~1.0 per 5 ms regardless of how fast the loop runs (the old integer
   // deltaMicros/5000 truncated to 1, sometimes 0, and depended on delay(5)).
-  dzValue -= (float)deltaMicros / 5000.0f;
-  dzValue = max(dzValue, 0.0f);
+  float dzDecay = (float)deltaMicros / 5000.0f;
+  if (dzValue > 0.0f)
+    dzValue = max(dzValue - dzDecay, 0.0f);
+  else if (dzValue < 0.0f)
+    dzValue = min(dzValue + dzDecay, 0.0f);
   previousMillis = currentMillis;
   previousMicros = currentMicros;
 
 // Debugging graph for tuning the dead zone (Serial plotter).
 //  unlocked  - the true transmit gate (high = transmitting)
-//  dzValue   - unlock-burst accumulator (x100)
+//  dzValue   - net-signed unlock accumulator (x100); cancels toward 0 on noise
 //  delta     - per-loop movement (x100); 0 when still, nonzero while turning
 //  sinceMove - ms since genuine movement; relock fires at DZ_PAUSE_TIMEOUT_MS
 #ifdef DEBUG_DZ_TUNE
@@ -316,7 +320,7 @@ void OttoPot::updateValue(unsigned long currentMillis,
     // wreck the plotter's autoscale. Anything past DZ_PAUSE_TIMEOUT_MS (300)
     // is meaningless anyway — the pot has already relocked.
     debugln(",unlocked:%d,dzValue:%d,delta:%d,sinceMove:%d",
-            (!locked) * 4000, (int)max(dzValue * 100.0f, 0.0f),
+            (!locked) * 4000, (int)(dzValue * 100.0f),
             delta * 100,
             (int)min(currentMillis - lastMovementMillis, (unsigned long)600));
   }
