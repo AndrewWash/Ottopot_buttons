@@ -33,6 +33,13 @@ public:
   float dzValue;
   int pendingDelta;
 
+  // Deadzone state machine (Finding #5). dzValue still drives the initial
+  // unlock burst; staying unlocked is now time-based — see updateValue().
+  bool locked;                      // true = silent (not transmitting)
+  unsigned long lastMovementMillis; // last time genuine (net) movement seen
+  unsigned long netWindowMillis;    // start of current net-displacement window
+  int netWindowSum;                 // signed sum of delta over current window
+
   rgb offColor;
   rgb onColor;
   rgb currentLEDs[24];

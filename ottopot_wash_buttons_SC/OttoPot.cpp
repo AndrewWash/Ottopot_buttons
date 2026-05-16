@@ -9,6 +9,17 @@ LICENSE: GPL v3 (http://www.gnu.org/licenses/gpl.html)
 #include <Arduino.h>
 #include <Mux.h>
 
+// ---- Deadzone tuning (Finding #5) ---------------------------------------
+// dzValue still detects the initial unlock burst (stray-CC / automation-
+// takeover guard). Staying unlocked is time-based: the pot keeps transmitting
+// as long as genuine movement keeps refreshing lastMovementMillis, and only
+// relocks after a true pause. "Genuine movement" = net SIGNED displacement
+// over a short window (real rotation nets travel; noise oscillates, nets ~0).
+#define DZ_UNLOCK_THRESHOLD  10    // dzValue burst to unlock (stray-CC guard)
+#define DZ_PAUSE_TIMEOUT_MS  300   // relock after this much stillness   [TUNE]
+#define DZ_NET_WINDOW_MS     40    // net-displacement sampling window   [TUNE]
+#define DZ_NET_MOVE_COUNTS   2     // signed counts/window = "genuine"   [TUNE]
+
 OttoPot::OttoPot(admux::Mux *rmux, admux::Mux *rmux2, int rmuxc, int rcc,
                  int rchannel, uint8_t ledRingAddress)
     : leds(ledRingAddress) {
@@ -23,6 +34,11 @@ OttoPot::OttoPot(admux::Mux *rmux, admux::Mux *rmux2, int rmuxc, int rcc,
   pendingDelta = 0;
   receivedHSB = 0;
   receivedLSB = 0;
+
+  locked = true;                 // boot silent — must not transmit
+  lastMovementMillis = millis();
+  netWindowMillis = millis();
+  netWindowSum = 0;
 
   previousMillis = millis();
   previousMicros = micros();
@@ -215,10 +231,51 @@ void OttoPot::updateValue(unsigned long currentMillis,
   }
 #endif
 
-  if (dzValue > 10) {
-    interactionMillis = currentMillis;
-    // Flush the run-up travel that accumulated while the deadzone was locked,
-    // so the gesture doesn't visibly lag the knob on unlock.
+  // --- Deadzone state machine (Finding #5) -------------------------------
+  // Previously a single dzValue>10 test gated transmission, so staying
+  // unlocked needed enough movement RATE to out-pace the decay — any turn
+  // slower than that locked mid-gesture and stop-started ("choppiness").
+  // Now dzValue only detects the initial unlock; staying unlocked is timed.
+  if (locked) {
+    // Initial unlock still requires a deliberate rate burst — this is the
+    // stray-CC / automation-takeover guard and must stay.
+    if (dzValue > DZ_UNLOCK_THRESHOLD) {
+      locked = false;
+      lastMovementMillis = currentMillis;
+      netWindowMillis = currentMillis;
+      netWindowSum = 0;
+    } else {
+      // Still locked: buffer run-up travel so the gesture doesn't lag the
+      // knob on unlock. Done only when we stay locked, so the transmit block
+      // below (value + delta + pendingDelta) never double-counts this delta.
+      pendingDelta += delta;
+    }
+  } else {
+    // Staying unlocked is time-based, not rate-based. Accumulate net SIGNED
+    // displacement over a short window: real rotation is directional and nets
+    // travel, analog noise oscillates around zero and nets ~0.
+    netWindowSum += delta;
+    if (currentMillis - netWindowMillis >= DZ_NET_WINDOW_MS) {
+      if (abs(netWindowSum) >= DZ_NET_MOVE_COUNTS) {
+        lastMovementMillis = currentMillis;
+      }
+      netWindowSum = 0;
+      netWindowMillis = currentMillis;
+    }
+    // Relock only after a true pause — never mid-slow-turn.
+    if (currentMillis - lastMovementMillis > DZ_PAUSE_TIMEOUT_MS) {
+      locked = true;
+      // Discard buffered run-up so a slow noise drift can't build a latent
+      // jump; clear dzValue so re-unlocking needs a fresh deliberate burst.
+      pendingDelta = 0;
+      netWindowSum = 0;
+      dzValue = 0.0f;
+    }
+  }
+
+  // Transmit whenever unlocked — including the loop that just unlocked, hence
+  // a plain `if` (not `else if`) so pendingDelta flushes the same pass.
+  if (!locked) {
     newValue = value + delta + pendingDelta;
     pendingDelta = 0;
     if (newValue < 0) {
@@ -227,36 +284,35 @@ void OttoPot::updateValue(unsigned long currentMillis,
       newValue = MAX_POT_VALUE;
     }
     if (newValue != value) {
+      // Refresh on every transmit so the 100 ms incoming-CC gate stays closed
+      // for the whole gesture, however slow.
+      interactionMillis = currentMillis;
       setNewValue(newValue);
       sendMidiCC(map(value, 0, MAX_POT_VALUE, 0, 16383));
     }
-  } else {
-    // Locked: buffer travel so the run-up isn't dropped when we unlock.
-    pendingDelta += delta;
   }
 
-  // Time-based decay, decoupled from loop rate: ~1.0 per 5 ms regardless of
-  // how fast the loop runs (the old integer deltaMicros/5000 truncated to 1,
-  // sometimes 0, and depended entirely on delay(5) existing).
+  // Time-based decay of the unlock-burst accumulator, decoupled from loop
+  // rate: ~1.0 per 5 ms regardless of how fast the loop runs (the old integer
+  // deltaMicros/5000 truncated to 1, sometimes 0, and depended on delay(5)).
   dzValue -= (float)deltaMicros / 5000.0f;
   dzValue = max(dzValue, 0.0f);
-  // Relocked: discard the buffered run-up so a slow noise drift while locked
-  // can't quietly build up into a latent jump.
-  if (dzValue <= 0.0f) {
-    pendingDelta = 0;
-  }
   previousMillis = currentMillis;
   previousMicros = currentMicros;
 
-// Debugging graph for tuning the dead zone
+// Debugging graph for tuning the dead zone (Serial plotter).
+//  unlocked     - the true transmit gate (high = transmitting)
+//  dzValue      - unlock-burst accumulator (x100)
+//  netWindowSum - movement discriminator: ~0 when still, ramps on a slow turn
+//  sinceMove    - ms since genuine movement; relock fires at DZ_PAUSE_TIMEOUT_MS
 #ifdef DEBUG_DZ_TUNE
   if (muxc == 0) {
     debug("%dpin1:%d", muxc, pin1[MEDIAN]);
     debug(",%dpin2:%d", muxc, pin2[MEDIAN]);
-  }
-  if (muxc == 0) {
-    debugln(",interaction:%d,%ddzValue:%d", (dzValue > 10) * 4000, muxc,
-            (int)max(dzValue * 100.0f, 0.0f));
+    debugln(",unlocked:%d,dzValue:%d,netWindowSum:%d,sinceMove:%d",
+            (!locked) * 4000, (int)max(dzValue * 100.0f, 0.0f),
+            netWindowSum * 100,
+            (int)(currentMillis - lastMovementMillis));
   }
 #endif
 }

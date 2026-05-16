@@ -11,7 +11,9 @@
       "Bash(ls *)",
       "Bash(find C:\\\\\\\\code\\\\\\\\Ottopot_buttons *)",
       "Bash(grep *)",
-      "Bash(find \"C:\\\\\\\\code\\\\\\\\Ottopot_buttons\" -name)"
+      "Bash(find \"C:\\\\\\\\code\\\\\\\\Ottopot_buttons\" -name)",
+      "Bash(git -C \"C:/code/Ottopot_buttons\" log --oneline -5)",
+      "Bash(git -C \"C:/code/Ottopot_buttons\" branch --show-current)"
     ]
   }
 }

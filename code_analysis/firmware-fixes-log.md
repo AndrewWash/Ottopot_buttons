@@ -183,3 +183,65 @@ Nothing below could be done locally — no Teensy and no Arduino toolchain.
    stray CCs (automation-takeover protection intact).
 8. **Boot test (#11):** hold/move a knob during the boot intro — confirm no
    jump on the first post-intro sample.
+
+---
+
+## ROUND 2 — Full potentiometer fix · 2026-05-16
+
+> Branch `blind-fixes`. Build from Round 1 confirmed working on hardware
+> ("pretty good but not perfect" — slow fine adjustments still stop-start).
+> This round applies the two findings deferred above (#5, #7). Buttons
+> back-burnered. Toolchain still not installed locally — compile + tune owed.
+
+### #5 — Slow-turn choppiness (deadzone redesign) · APPLIED
+`OttoPot.h` / `OttoPot.cpp`. The single `dzValue > 10` test did two jobs:
+detect the initial unlock burst *and* gate staying unlocked. The second is
+rate-based, so any turn slower than the decay rate (~15°/sec) drained the
+bucket mid-gesture and relocked — the choppiness.
+**New state machine** (`updateValue()`):
+- New members (`OttoPot.h`): `bool locked`, `unsigned long lastMovementMillis`,
+  `unsigned long netWindowMillis`, `int netWindowSum`. Initialized in the ctor
+  (`locked = true` — boot silent).
+- **Unlock** unchanged: `dzValue` rate burst > `DZ_UNLOCK_THRESHOLD` (stray-CC
+  / automation-takeover guard — preserved).
+- **Stay unlocked** is now time-based: net *signed* `delta` summed over a
+  `DZ_NET_WINDOW_MS` window; if `|netWindowSum| >= DZ_NET_MOVE_COUNTS` it is
+  genuine movement and refreshes `lastMovementMillis`. Real rotation nets
+  travel; noise oscillates and nets ~0 — the discriminator the old `abs(delta)`
+  bucket discarded.
+- **Relock** only when `currentMillis - lastMovementMillis > DZ_PAUSE_TIMEOUT_MS`
+  (a true pause). On relock: discard `pendingDelta`, clear `dzValue` so
+  re-unlocking needs a fresh burst.
+- Transmit every unlocked loop the value changes; `interactionMillis` refreshed
+  on every transmit so the 100 ms incoming-CC gate stays closed for the whole
+  (slow) gesture.
+- `pendingDelta` buffering (#4) preserved: buffered only while staying locked,
+  so the transmit block `value + delta + pendingDelta` never double-counts.
+**Tuning constants** (`#define` block at top of `OttoPot.cpp`):
+`DZ_UNLOCK_THRESHOLD 10`, `DZ_PAUSE_TIMEOUT_MS 300`, `DZ_NET_WINDOW_MS 40`,
+`DZ_NET_MOVE_COUNTS 2` — last three are `[TUNE]` on hardware.
+
+### #7 — Reduce `delay(5)` loop latency · APPLIED
+`ottopot_wash_buttons_SC.ino` — added `#define LOOP_DELAY_MS 1`; `delay(5)` →
+`delay(LOOP_DELAY_MS)`. Cuts knob-to-MIDI latency ~5-7 ms → ~1-2 ms. Safe now
+that the deadzone decay is time-based (#6) and the new #5 logic uses `millis()`
+timeouts. 1 ms keeps the loop period far below `DZ_NET_WINDOW_MS` so the
+net-displacement window still spans many samples. Final value is `[TUNE]`.
+
+### `DEBUG_DZ_TUNE` instrumentation extended
+`(dzValue > 10)` no longer means "locked", so the plotter block now emits
+`unlocked` (true gate), `dzValue*100`, `netWindowSum*100`, and `sinceMove`
+(ms since genuine movement). Needs both `DEBUG` *and* `DEBUG_DZ_TUNE` defined
+in `main.h`.
+
+### Verification still owed (hardware tuning session)
+1. Compile clean for Teensy 4.0, USB Type = MIDI; also build the debug variant.
+2. **Noise floor:** idle pots ~1 min, read peak `|netWindowSum|` of pure noise
+   on the Serial plotter; set `DZ_NET_MOVE_COUNTS` just above it. Zero stray CCs.
+3. **Slow fine turn:** `unlocked` trace stays high the whole turn — no
+   stop-start. This is the choppiness fix being verified.
+4. **Release:** `unlocked` drops ~`DZ_PAUSE_TIMEOUT_MS` after stopping; tune
+   the timeout for feel.
+5. Re-check `DZ_NET_MOVE_COUNTS` (the noise floor shifted with the 1 ms delay).
+6. Full revolutions both directions — no blip, no DC drift.
+7. Dialed in → re-comment `DEBUG`/`DEBUG_DZ_TUNE` in `main.h`, flash production.

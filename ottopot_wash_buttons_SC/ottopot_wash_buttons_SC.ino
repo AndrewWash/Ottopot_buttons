@@ -9,6 +9,21 @@
 
   LICENSE: GPL v3 (http://www.gnu.org/licenses/gpl.html)
   Based on the Ottopot firmware by the upstream Ottopot authors.
+
+  -------------------------------------------------------------------------
+  FIRMWARE VERSION: v0.3  (2026-05-16, branch blind-fixes)
+
+  CHANGE LOG
+    v0.3  Full potentiometer fix:
+          - #5 Deadzone redesign — staying unlocked is now time-based, not
+               rate-based; slow fine turns no longer stop-start ("choppiness").
+          - #7 Loop delay 5 ms -> 1 ms; knob-to-MIDI latency ~5-7 ms -> ~1-2 ms.
+          - DEBUG_DZ_TUNE plotter output extended (unlocked/dzValue/
+            netWindowSum/sinceMove).
+    v0.2  Code-review fixes #1-#4, #6, #8-#11 (travel accuracy, robustness,
+          run-up buffering, time-based decay, ADC settling, boot baseline).
+    v0.1  Initial Wash + Buttons sketch (8 knobs + 2 bank switches).
+  -------------------------------------------------------------------------
 */
 
 #include "EndlessPotentiometer.h"
@@ -24,6 +39,14 @@
 // ---------- LED frame rate ------------------------------------------------
 #define LED_UPDATES_PER_SECOND 60
 #define LED_UPDATE_MILLIS      (1000 / LED_UPDATES_PER_SECOND)
+
+// ---------- Loop pacing (Finding #7) --------------------------------------
+// Was a hard delay(5) — ~90-95% of the loop period — adding ~5-7 ms of
+// knob-to-MIDI latency. Actual per-loop work is ~0.3-0.5 ms. 1 ms keeps the
+// loop period far below DZ_NET_WINDOW_MS so the deadzone discriminator still
+// spans many samples. The deadzone decay is time-based (#6), so reducing this
+// does not change the unlock behaviour. [TUNE on hardware]
+#define LOOP_DELAY_MS          1
 
 // ---------- Switches ------------------------------------------------------
 #define PIN_SW_PREV    2
@@ -128,5 +151,5 @@ void loop() {
 
     usbMIDI.send_now();
     while (usbMIDI.read()) { /* drain */ }
-    delay(5);
+    delay(LOOP_DELAY_MS);
 }
