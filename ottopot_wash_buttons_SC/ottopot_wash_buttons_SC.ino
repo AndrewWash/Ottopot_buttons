@@ -11,9 +11,14 @@
   Based on the Ottopot firmware by the upstream Ottopot authors.
 
   -------------------------------------------------------------------------
-  FIRMWARE VERSION: v0.3  (2026-05-16, branch blind-fixes)
+  FIRMWARE VERSION: v0.4  (2026-05-16)
 
   CHANGE LOG
+    v0.4  Hardware-tuned deadzone (diag-pot session):
+          - Staying-unlocked rewritten as a continuous net-displacement
+            accumulator, replacing the fixed 40 ms window that reintroduced a
+            slow-turn speed floor. Ultra-slow fine turns now track smoothly.
+          - Unlock threshold lowered (10 -> 1.5) for near-instant unlock.
     v0.3  Full potentiometer fix:
           - #5 Deadzone redesign — staying unlocked is now time-based, not
                rate-based; slow fine turns no longer stop-start ("choppiness").
